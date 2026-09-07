@@ -8,14 +8,23 @@ This project is the defensive counterpart to X5 — detects MITM and spoofing at
 - **ARP-Cache Watcher**: Monitors gateway MAC address for drift/arbitration table changes
 - **DHCP Pool Gauge**: Detects DHCP pool exhaustion from lease counter heuristics
 - **DNS Consistency Checker**: Compares canary-domain resolution across multiple resolvers
+- **Real ARP frame parser**: decodes raw ethernet+L2 frames (RFC 826) and flags gratuitous
+  announcements and IP/MAC conflicts
+- **Real DNS packet parser**: builds/decodes actual DNS query/response wire format and
+  detects query↔response mismatch (transaction-id, question-name, spoofed answer)
+- **TLS certificate hostname check**: pure-stdlib X.509 DER parser extracts the subject CN
+  and SAN extension (OID 2.5.29.17) and flags hostname mismatches
 - **SIEM Output**: All detectors emit normalized JSON events for ingestion into SIEM pipelines
 - **Offline Demo**: Runs against embedded sample ARP/DNS/DHCP data without live traffic
 
 ## Features
 
 - **ARP Drift Alarm**: Detects gateway MAC address changes indicating ARP spoofing
+- **ARP Frame Analysis**: byte-exact ethernet/ARP parser; builds and parses frames for tests
 - **DHCP Exhaustion Detection**: Flags DHCP pool starvation from lease/offer ratios
 - **DNS Canary Comparison**: Resolves canary domains across resolvers to detect DNS spoofing
+- **DNS Wire-Format Matching**: real query/response packets checked for id/name/answer mismatches
+- **X.509 Hostname Verification**: pure-Python DER reader with wildcard SAN matching
 - **JSON Event Emission**: SIEM-compatible structured event output
 - **Configurable Thresholds**: Tunable sensitivity for each detector
 - **Offline Processing**: Parses embedded sample data for demonstration
@@ -24,20 +33,33 @@ This project is the defensive counterpart to X5 — detects MITM and spoofing at
 
 ```bash
 # No external dependencies required — pure Python stdlib
-python3 mitm_detectors.py
+python3 firmware/mitm_detectors.py
 ```
 
 ## Usage
 
 ```bash
-# Run full demo with embedded sample data
-python3 mitm_detectors.py
+# Run full demo with embedded sample data + real capture parsers
+python3 firmware/mitm_detectors.py
+
+# Report mode writes reports/mitm_report.json
+python3 firmware/mitm_detectors.py --demo-report
+
+# Plan only
+python3 firmware/mitm_detectors.py --dry-run
 
 # Programmatic usage
-from mitm_detectors import ARPCacheWatcher, DHCPPoolGauge, DNSConsistencyChecker
+from mitm_detectors import ARPCacheWatcher, ARPFrameAnalyzer, \
+    DNSPacketPairChecker, TLSHostnameChecker, build_dns_query, \
+    build_dns_response, build_arp_frame, FIXTURE_CERT_DER_B64
 
 arp = ARPCacheWatcher(threshold=3)
 alerts = arp.process_events(sample_arp_events)
+
+frame = build_arp_frame("aa:bb:cc:dd:ee:01", "192.168.1.1",
+                        "ff:ff:ff:ff:ff:ff", "192.168.1.50")
+mitm = ARPFrameAnalyzer()
+print(mitm.process_frame(frame))
 ```
 
 ## Example Output
@@ -117,6 +139,32 @@ If you detect real spoofing attacks using these tools, follow responsible disclo
 3. Preserve forensic evidence for investigation
 4. Follow your organization's incident response procedures
 5. Do not attempt to counter-attack the spoofing source
+
+## Live Lab Test Plan
+
+1. `python3 firmware/mitm_detectors.py` — runs all six detectors: ARP drift, DHCP
+   exhaustion, DNS canary check, plus the real frame/packet/cert parsers; prints
+   `ARP CONFLICT`, `DNS MISMATCH` and `TLS HOSTNAME MISMATCH` alerts and JSON SIEM
+   events; exits 0.
+2. `python3 firmware/mitm_detectors.py --dry-run` — prints plan, exit 0.
+3. `python3 firmware/mitm_detectors.py --demo-report` — writes
+   `reports/mitm_report.json` containing all alerts plus the parsed capture details.
+4. `python3 -m unittest discover -s tests` — 26 assertions covering raw ARP frame
+   round-trips, DNS wire parsing, spoofed-answer and transaction-id detection, and
+   X.509 CN/SAN extraction with wildcard matching (all offline).
+
+## Metrics
+
+- 6 detection paths: `arp_watcher`, `dhcp_gauge`, `dns_checker` + real `arp_frame`,
+  `dns_pair`, `tls_cert`
+- ARP: byte-exact RFC 826 parser; IP/MAC conflict and gratuitous-reply alerts
+- DNS: real wire-format query builder (`build_dns_query`) and response builder
+  (`build_dns_response`); transaction-id, question-name and answer spoof checks
+- TLS: pure-stdlib ASN.1/DER reader extracts CN and SAN (2.5.29.17) with `*.domain`
+  wildcard matching; self-signed fixture (CN=SAN=legit.example.com) verifies both
+  match and mismatch paths
+- 26 unittest assertions, all offline; no packets sent, no network namespace needed
+- `reports/mitm_report.json` (gitignored) captures full alert set
 
 ## License
 

@@ -2,3 +2,9 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+reports/
+logs/
+*.jsonl
+builds/
+crash_*
+crash/
